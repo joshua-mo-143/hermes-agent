@@ -211,6 +211,12 @@ class TestHasContentAfterThinkBlock:
     def test_no_think_block_returns_true(self, agent):
         assert agent._has_content_after_think_block("just normal content") is True
 
+    def test_thinking_block_variant_returns_false(self, agent):
+        assert agent._has_content_after_think_block("<thinking>reasoning</thinking>") is False
+
+    def test_closing_tag_only_reasoning_prefix_returns_true(self, agent):
+        assert agent._has_content_after_think_block("hidden reasoning</think> visible answer") is True
+
 
 class TestStripThinkBlocks:
     def test_none_returns_empty(self, agent):
@@ -230,6 +236,16 @@ class TestStripThinkBlocks:
         assert "line1" not in result
         assert "visible" in result
 
+    def test_thinking_variant_removed(self, agent):
+        result = agent._strip_think_blocks("<thinking>reasoning</thinking> answer")
+        assert "reasoning" not in result
+        assert "answer" in result
+
+    def test_closing_tag_only_reasoning_prefix_removed(self, agent):
+        result = agent._strip_think_blocks("hidden reasoning</think> answer")
+        assert "hidden reasoning" not in result
+        assert "answer" in result
+
 
 class TestExtractReasoning:
     def test_reasoning_field(self, agent):
@@ -245,6 +261,20 @@ class TestExtractReasoning:
             reasoning_details=[{"summary": "step-by-step analysis"}],
         )
         assert "step-by-step analysis" in agent._extract_reasoning(msg)
+
+    def test_reasoning_details_object_array(self, agent):
+        msg = _mock_assistant_msg(
+            reasoning_details=[SimpleNamespace(text="object reasoning")],
+        )
+        assert "object reasoning" in agent._extract_reasoning(msg)
+
+    def test_reasoning_details_summary_list_objects(self, agent):
+        msg = _mock_assistant_msg(
+            reasoning_details=[
+                SimpleNamespace(summary=[SimpleNamespace(text="summary reasoning")])
+            ],
+        )
+        assert "summary reasoning" in agent._extract_reasoning(msg)
 
     def test_no_reasoning_returns_none(self, agent):
         msg = _mock_assistant_msg()
@@ -1224,6 +1254,71 @@ class TestRunConversation:
         # After 3 retries with no real content, should return partial
         assert result["completed"] is False
         assert result.get("partial") is True
+
+    def test_reasoning_only_response_requests_continuation(self, agent):
+        """Reasoning-only chat responses should request a visible-answer continuation."""
+        self._setup_agent(agent)
+        reasoning_msg = _mock_assistant_msg(
+            content="",
+            reasoning_details=[SimpleNamespace(text="Let me reason about that first.")],
+        )
+        reasoning_resp = SimpleNamespace(
+            choices=[SimpleNamespace(message=reasoning_msg, finish_reason="stop")],
+            model="test/model",
+            usage=None,
+        )
+        final_resp = _mock_response(content="Visible answer", finish_reason="stop")
+        agent.client.chat.completions.create.side_effect = [reasoning_resp, final_resp]
+
+        with (
+            patch.object(agent, "_persist_session"),
+            patch.object(agent, "_save_trajectory"),
+            patch.object(agent, "_cleanup_task_resources"),
+        ):
+            result = agent.run_conversation("answer me")
+
+        assert result["completed"] is True
+        assert result["api_calls"] == 2
+        assert result["final_response"] == "Visible answer"
+
+        second_call_messages = agent.client.chat.completions.create.call_args_list[1].kwargs["messages"]
+        assert second_call_messages[-1]["role"] == "user"
+        assert "Continue from your prior reasoning" in second_call_messages[-1]["content"]
+        interim_assistant = next(msg for msg in second_call_messages if msg.get("role") == "assistant")
+        assert interim_assistant["reasoning_content"] == "Let me reason about that first."
+        assert interim_assistant["reasoning_details"] == [{"text": "Let me reason about that first."}]
+
+    def test_reasoning_content_only_response_requests_continuation(self, agent):
+        """Providers like Venice that use reasoning_content should hit the same continuation path."""
+        self._setup_agent(agent)
+        reasoning_msg = _mock_assistant_msg(
+            content="",
+            reasoning_content="Let me think through that before answering.",
+        )
+        reasoning_resp = SimpleNamespace(
+            choices=[SimpleNamespace(message=reasoning_msg, finish_reason="stop")],
+            model="test/model",
+            usage=None,
+        )
+        final_resp = _mock_response(content="Venice-style visible answer", finish_reason="stop")
+        agent.client.chat.completions.create.side_effect = [reasoning_resp, final_resp]
+
+        with (
+            patch.object(agent, "_persist_session"),
+            patch.object(agent, "_save_trajectory"),
+            patch.object(agent, "_cleanup_task_resources"),
+        ):
+            result = agent.run_conversation("answer me")
+
+        assert result["completed"] is True
+        assert result["api_calls"] == 2
+        assert result["final_response"] == "Venice-style visible answer"
+
+        second_call_messages = agent.client.chat.completions.create.call_args_list[1].kwargs["messages"]
+        assert second_call_messages[-1]["role"] == "user"
+        assert "Continue from your prior reasoning" in second_call_messages[-1]["content"]
+        interim_assistant = next(msg for msg in second_call_messages if msg.get("role") == "assistant")
+        assert interim_assistant["reasoning_content"] == "Let me think through that before answering."
 
     def test_nous_401_refreshes_after_remint_and_retries(self, agent):
         self._setup_agent(agent)

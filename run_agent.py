@@ -1070,18 +1070,104 @@ class AIAgent:
         """
         if not content:
             return False
-        
-        # Remove all <think>...</think> blocks (including nested ones, non-greedy)
-        cleaned = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL)
-        
-        # Check if there's any non-whitespace content remaining
-        return bool(cleaned.strip())
+
+        _, visible = AIAgent._extract_inline_reasoning_segments(content)
+        return bool(visible.strip())
     
     def _strip_think_blocks(self, content: str) -> str:
         """Remove <think>...</think> blocks from content, returning only visible text."""
         if not content:
             return ""
-        return re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL)
+        _, visible = AIAgent._extract_inline_reasoning_segments(content)
+        return visible
+
+    @staticmethod
+    def _extract_reasoning_fragments(value: Any) -> List[str]:
+        """Normalize provider-specific reasoning payloads into plain text chunks."""
+        if value is None:
+            return []
+
+        if isinstance(value, str):
+            text = value.strip()
+            return [text] if text else []
+
+        if isinstance(value, list):
+            fragments: List[str] = []
+            for item in value:
+                fragments.extend(AIAgent._extract_reasoning_fragments(item))
+            return fragments
+
+        if isinstance(value, dict):
+            fragments: List[str] = []
+            for key in ("summary", "content", "text", "thinking"):
+                fragments.extend(AIAgent._extract_reasoning_fragments(value.get(key)))
+            return fragments
+
+        model_dump = getattr(value, "model_dump", None)
+        if callable(model_dump):
+            try:
+                return AIAgent._extract_reasoning_fragments(model_dump())
+            except Exception:
+                pass
+
+        fragments: List[str] = []
+        for attr in ("summary", "content", "text", "thinking"):
+            fragments.extend(AIAgent._extract_reasoning_fragments(getattr(value, attr, None)))
+        if fragments:
+            return fragments
+
+        if hasattr(value, "__dict__"):
+            return AIAgent._extract_reasoning_fragments(vars(value))
+
+        return []
+
+    @staticmethod
+    def _extract_inline_reasoning_segments(content: str) -> tuple[List[str], str]:
+        """Split inline reasoning markup from visible content.
+
+        Supports balanced reasoning blocks and MiniMax-style closing-tag-only
+        delimiters where the hidden reasoning appears before ``</think>``.
+        """
+        if not content:
+            return [], ""
+
+        working = str(content)
+        reasoning_parts: List[str] = []
+        seen: set[str] = set()
+
+        def _remember(text: str) -> None:
+            cleaned = (text or "").strip()
+            if cleaned and cleaned not in seen:
+                reasoning_parts.append(cleaned)
+                seen.add(cleaned)
+
+        tag_pattern = r"(?:REASONING_SCRATCHPAD|think|thinking|reasoning)"
+        closing_tag_re = re.compile(rf"</{tag_pattern}\s*>", flags=re.IGNORECASE)
+        opening_tag_re = re.compile(rf"<{tag_pattern}\b[^>]*>", flags=re.IGNORECASE)
+        balanced_block_re = re.compile(
+            rf"<{tag_pattern}\b[^>]*>(.*?)</{tag_pattern}\s*>",
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        stray_tag_re = re.compile(rf"</?{tag_pattern}\b[^>]*>", flags=re.IGNORECASE)
+
+        # MiniMax M2 can emit a closing </think> marker without an opening tag.
+        # Treat the text before that first unmatched close tag as hidden reasoning.
+        while True:
+            close_match = closing_tag_re.search(working)
+            if not close_match:
+                break
+            prefix = working[: close_match.start()]
+            if opening_tag_re.search(prefix):
+                break
+            _remember(prefix)
+            working = working[close_match.end():]
+
+        for match in balanced_block_re.finditer(working):
+            _remember(match.group(1))
+
+        visible = balanced_block_re.sub("", working)
+        visible = stray_tag_re.sub("", visible)
+        return reasoning_parts, visible
 
     def _looks_like_codex_intermediate_ack(
         self,
@@ -1171,26 +1257,25 @@ class AIAgent:
             Combined reasoning text, or None if no reasoning found
         """
         reasoning_parts = []
+
+        def _append_unique(value: Any) -> None:
+            for fragment in AIAgent._extract_reasoning_fragments(value):
+                if fragment not in reasoning_parts:
+                    reasoning_parts.append(fragment)
         
         # Check direct reasoning field
         if hasattr(assistant_message, 'reasoning') and assistant_message.reasoning:
-            reasoning_parts.append(assistant_message.reasoning)
+            _append_unique(assistant_message.reasoning)
         
         # Check reasoning_content field (alternative name used by some providers)
         if hasattr(assistant_message, 'reasoning_content') and assistant_message.reasoning_content:
-            # Don't duplicate if same as reasoning
-            if assistant_message.reasoning_content not in reasoning_parts:
-                reasoning_parts.append(assistant_message.reasoning_content)
+            _append_unique(assistant_message.reasoning_content)
         
         # Check reasoning_details array (OpenRouter unified format)
         # Format: [{"type": "reasoning.summary", "summary": "...", ...}, ...]
         if hasattr(assistant_message, 'reasoning_details') and assistant_message.reasoning_details:
             for detail in assistant_message.reasoning_details:
-                if isinstance(detail, dict):
-                    # Extract summary from reasoning detail object
-                    summary = detail.get('summary') or detail.get('content') or detail.get('text')
-                    if summary and summary not in reasoning_parts:
-                        reasoning_parts.append(summary)
+                _append_unique(detail)
         
         # Combine all reasoning parts
         if reasoning_parts:
@@ -3849,6 +3934,14 @@ class AIAgent:
             extra_body["provider"] = provider_preferences
         _is_nous = "nousresearch" in self._base_url_lower
 
+        if (
+            ("api.minimax.io" in self._base_url_lower or "api.minimaxi.com" in self._base_url_lower)
+            and not (self.reasoning_config and self.reasoning_config.get("enabled") is False)
+        ):
+            # MiniMax's direct OpenAI-compatible route can return empty visible
+            # content unless reasoning is split into reasoning_details.
+            extra_body["reasoning_split"] = True
+
         if self._supports_reasoning_extra_body():
             if _is_github_models:
                 github_reasoning = self._github_models_reasoning_extra_body()
@@ -3957,7 +4050,7 @@ class AIAgent:
         # directly in the content rather than returning separate API fields).
         if not reasoning_text:
             content = assistant_message.content or ""
-            think_blocks = re.findall(r'<think>(.*?)</think>', content, flags=re.DOTALL)
+            think_blocks, _ = AIAgent._extract_inline_reasoning_segments(content)
             if think_blocks:
                 combined = "\n\n".join(b.strip() for b in think_blocks if b.strip())
                 reasoning_text = combined or None
@@ -6335,6 +6428,8 @@ class AIAgent:
                     # Reset retry counter on successful tool call validation
                     if hasattr(self, '_invalid_tool_retries'):
                         self._invalid_tool_retries = 0
+                    if hasattr(self, '_reasoning_only_continuations'):
+                        self._reasoning_only_continuations = 0
                     
                     # Validate tool call arguments are valid JSON
                     # Handle empty strings as empty objects (common model quirk)
@@ -6467,11 +6562,61 @@ class AIAgent:
                     
                     # Check if response only has think block with no actual content after it
                     if not self._has_content_after_think_block(final_response):
+                        interim_msg = self._build_assistant_message(assistant_message, "incomplete")
+                        reasoning_text = interim_msg.get("reasoning")
+                        fallback = getattr(self, '_last_content_with_tools', None)
+
+                        if not fallback and self.api_mode == "chat_completions" and reasoning_text:
+                            if not hasattr(self, "_reasoning_only_continuations"):
+                                self._reasoning_only_continuations = 0
+                            self._reasoning_only_continuations += 1
+
+                            last_msg = messages[-1] if messages else None
+                            duplicate_interim = (
+                                isinstance(last_msg, dict)
+                                and last_msg.get("role") == "assistant"
+                                and last_msg.get("finish_reason") == "incomplete"
+                                and (last_msg.get("content") or "") == (interim_msg.get("content") or "")
+                                and (last_msg.get("reasoning") or "") == (interim_msg.get("reasoning") or "")
+                                and last_msg.get("reasoning_details") == interim_msg.get("reasoning_details")
+                            )
+                            if not duplicate_interim:
+                                messages.append(interim_msg)
+
+                            if self._reasoning_only_continuations < 3:
+                                self._vprint(
+                                    f"{self.log_prefix}↻ Reasoning-only interim response; requesting visible answer "
+                                    f"({self._reasoning_only_continuations}/3)"
+                                )
+                                continue_msg = {
+                                    "role": "user",
+                                    "content": (
+                                        "[System: Continue from your prior reasoning and provide the visible answer "
+                                        "now. Do not repeat hidden reasoning. Reply with the answer directly unless "
+                                        "a tool call is still required.]"
+                                    ),
+                                }
+                                messages.append(continue_msg)
+                                self._session_messages = messages
+                                self._save_session_log(messages)
+                                continue
+
+                            self._reasoning_only_continuations = 0
+                            self._cleanup_task_resources(effective_task_id)
+                            self._persist_session(messages, conversation_history)
+                            return {
+                                "final_response": None,
+                                "messages": messages,
+                                "api_calls": api_call_count,
+                                "completed": False,
+                                "partial": True,
+                                "error": "Model generated reasoning-only responses with no visible answer after 3 continuation attempts",
+                            }
+
                         # If the previous turn already delivered real content alongside
                         # tool calls (e.g. "You're welcome!" + memory save), the model
                         # has nothing more to say. Use the earlier content immediately
                         # instead of wasting API calls on retries that won't help.
-                        fallback = getattr(self, '_last_content_with_tools', None)
                         if fallback:
                             logger.debug("Empty follow-up after tool calls — using prior turn content as final response")
                             self._last_content_with_tools = None
@@ -6494,8 +6639,7 @@ class AIAgent:
                         if not hasattr(self, '_empty_content_retries'):
                             self._empty_content_retries = 0
                         self._empty_content_retries += 1
-                        
-                        reasoning_text = self._extract_reasoning(assistant_message)
+
                         self._vprint(f"{self.log_prefix}⚠️  Response only contains think block with no content after it")
                         if reasoning_text:
                             reasoning_preview = reasoning_text[:500] + "..." if len(reasoning_text) > 500 else reasoning_text
@@ -6556,6 +6700,8 @@ class AIAgent:
                     # Reset retry counter on successful content
                     if hasattr(self, '_empty_content_retries'):
                         self._empty_content_retries = 0
+                    if hasattr(self, '_reasoning_only_continuations'):
+                        self._reasoning_only_continuations = 0
 
                     if (
                         self.api_mode == "codex_responses"
