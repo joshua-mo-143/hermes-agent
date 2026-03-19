@@ -1071,14 +1071,14 @@ class AIAgent:
         if not content:
             return False
 
-        _, visible = self._extract_inline_reasoning_segments(content)
+        _, visible = AIAgent._extract_inline_reasoning_segments(content)
         return bool(visible.strip())
     
     def _strip_think_blocks(self, content: str) -> str:
         """Remove <think>...</think> blocks from content, returning only visible text."""
         if not content:
             return ""
-        _, visible = self._extract_inline_reasoning_segments(content)
+        _, visible = AIAgent._extract_inline_reasoning_segments(content)
         return visible
 
     @staticmethod
@@ -1259,7 +1259,7 @@ class AIAgent:
         reasoning_parts = []
 
         def _append_unique(value: Any) -> None:
-            for fragment in self._extract_reasoning_fragments(value):
+            for fragment in AIAgent._extract_reasoning_fragments(value):
                 if fragment not in reasoning_parts:
                     reasoning_parts.append(fragment)
         
@@ -4050,7 +4050,7 @@ class AIAgent:
         # directly in the content rather than returning separate API fields).
         if not reasoning_text:
             content = assistant_message.content or ""
-            think_blocks, _ = self._extract_inline_reasoning_segments(content)
+            think_blocks, _ = AIAgent._extract_inline_reasoning_segments(content)
             if think_blocks:
                 combined = "\n\n".join(b.strip() for b in think_blocks if b.strip())
                 reasoning_text = combined or None
