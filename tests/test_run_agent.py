@@ -1288,6 +1288,38 @@ class TestRunConversation:
         assert interim_assistant["reasoning_content"] == "Let me reason about that first."
         assert interim_assistant["reasoning_details"] == [{"text": "Let me reason about that first."}]
 
+    def test_reasoning_content_only_response_requests_continuation(self, agent):
+        """Providers like Venice that use reasoning_content should hit the same continuation path."""
+        self._setup_agent(agent)
+        reasoning_msg = _mock_assistant_msg(
+            content="",
+            reasoning_content="Let me think through that before answering.",
+        )
+        reasoning_resp = SimpleNamespace(
+            choices=[SimpleNamespace(message=reasoning_msg, finish_reason="stop")],
+            model="test/model",
+            usage=None,
+        )
+        final_resp = _mock_response(content="Venice-style visible answer", finish_reason="stop")
+        agent.client.chat.completions.create.side_effect = [reasoning_resp, final_resp]
+
+        with (
+            patch.object(agent, "_persist_session"),
+            patch.object(agent, "_save_trajectory"),
+            patch.object(agent, "_cleanup_task_resources"),
+        ):
+            result = agent.run_conversation("answer me")
+
+        assert result["completed"] is True
+        assert result["api_calls"] == 2
+        assert result["final_response"] == "Venice-style visible answer"
+
+        second_call_messages = agent.client.chat.completions.create.call_args_list[1].kwargs["messages"]
+        assert second_call_messages[-1]["role"] == "user"
+        assert "Continue from your prior reasoning" in second_call_messages[-1]["content"]
+        interim_assistant = next(msg for msg in second_call_messages if msg.get("role") == "assistant")
+        assert interim_assistant["reasoning_content"] == "Let me think through that before answering."
+
     def test_nous_401_refreshes_after_remint_and_retries(self, agent):
         self._setup_agent(agent)
         agent.provider = "nous"
