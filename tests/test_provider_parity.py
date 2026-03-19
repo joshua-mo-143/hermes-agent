@@ -249,6 +249,19 @@ class TestBuildApiKwargsCustomEndpoint:
         assert "response_item_id" not in tool_call
 
 
+class TestBuildApiKwargsMiniMax:
+    def test_direct_minimax_enables_reasoning_split(self, monkeypatch):
+        agent = _make_agent(monkeypatch, "minimax", base_url="https://api.minimax.io/v1")
+        kwargs = agent._build_api_kwargs([{"role": "user", "content": "hi"}])
+        assert kwargs["extra_body"]["reasoning_split"] is True
+
+    def test_direct_minimax_omits_reasoning_split_when_disabled(self, monkeypatch):
+        agent = _make_agent(monkeypatch, "minimax", base_url="https://api.minimax.io/v1")
+        agent.reasoning_config = {"enabled": False}
+        kwargs = agent._build_api_kwargs([{"role": "user", "content": "hi"}])
+        assert kwargs.get("extra_body", {}).get("reasoning_split") is None
+
+
 class TestBuildApiKwargsCodex:
     def test_uses_responses_api_format(self, monkeypatch):
         agent = _make_agent(monkeypatch, "openai-codex", api_mode="codex_responses",
