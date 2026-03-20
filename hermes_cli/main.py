@@ -784,6 +784,7 @@ def cmd_model(args):
 
     provider_labels = {
         "openrouter": "OpenRouter",
+        "venice": "Venice",
         "nous": "Nous Portal",
         "openai-codex": "OpenAI Codex",
         "copilot-acp": "GitHub Copilot ACP",
@@ -810,6 +811,7 @@ def cmd_model(args):
     # Step 1: Provider selection — put active provider first with marker
     providers = [
         ("openrouter", "OpenRouter (100+ models, pay-per-use)"),
+        ("venice", "Venice (private OpenAI-compatible inference + images)"),
         ("nous", "Nous Portal (Nous Research subscription)"),
         ("openai-codex", "OpenAI Codex"),
         ("copilot-acp", "GitHub Copilot ACP (spawns `copilot --acp --stdio`)"),
@@ -896,7 +898,7 @@ def cmd_model(args):
         _model_flow_anthropic(config, current_model)
     elif selected_provider == "kimi-coding":
         _model_flow_kimi(config, current_model)
-    elif selected_provider in ("zai", "minimax", "minimax-cn", "kilocode", "opencode-zen", "opencode-go", "ai-gateway", "alibaba"):
+    elif selected_provider in ("venice", "zai", "minimax", "minimax-cn", "kilocode", "opencode-zen", "opencode-go", "ai-gateway", "alibaba"):
         _model_flow_api_key_provider(config, selected_provider, current_model)
 
 
@@ -1983,7 +1985,7 @@ def _model_flow_kimi(config, current_model=""):
 
 
 def _model_flow_api_key_provider(config, provider_id, current_model=""):
-    """Generic flow for API-key providers (z.ai, MiniMax)."""
+    """Generic flow for API-key providers (Venice, z.ai, MiniMax, etc.)."""
     from hermes_cli.auth import (
         PROVIDER_REGISTRY, _prompt_model_selection, _save_model_choice,
         _update_config_for_provider, deactivate_provider,
@@ -2018,6 +2020,12 @@ def _model_flow_api_key_provider(config, provider_id, current_model=""):
     else:
         print(f"  {pconfig.name} API key: {existing_key[:8]}... ✓")
         print()
+
+    if provider_id == "venice":
+        save_env_value("IMAGE_GENERATION_PROVIDER", "venice")
+        if not get_env_value("VENICE_IMAGE_MODEL"):
+            save_env_value("VENICE_IMAGE_MODEL", "nano-banana-pro")
+        save_env_value("AUXILIARY_VISION_PROVIDER", "venice")
 
     # Optional base URL override
     current_base = ""

@@ -32,6 +32,12 @@ def _clear_provider_env(monkeypatch):
         "OPENAI_BASE_URL",
         "OPENAI_API_KEY",
         "OPENROUTER_API_KEY",
+        "VENICE_API_KEY",
+        "VENICE_BASE_URL",
+        "VENICE_IMAGE_MODEL",
+        "IMAGE_GENERATION_PROVIDER",
+        "AUXILIARY_VISION_PROVIDER",
+        "AUXILIARY_VISION_MODEL",
         "GITHUB_TOKEN",
         "GH_TOKEN",
         "GLM_API_KEY",
@@ -189,6 +195,54 @@ def test_setup_keep_current_config_provider_uses_provider_specific_model_menu(tm
     assert "anthropic/claude-opus-4.6 (recommended)" not in captured["model_choices"]
 
 
+def test_setup_venice_configures_single_key_services(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    _clear_provider_env(monkeypatch)
+
+    config = load_config()
+
+    def fake_prompt_choice(question, choices, default=0):
+        if question == "Select your inference provider:":
+            return choices.index(
+                "Venice API key (private OpenAI-compatible inference + Venice images)"
+            )
+        if question == "Select default model:":
+            assert "venice-uncensored" in choices
+            return choices.index("venice-uncensored")
+        tts_idx = _maybe_keep_current_tts(question, choices)
+        if tts_idx is not None:
+            return tts_idx
+        raise AssertionError(f"Unexpected prompt_choice call: {question}")
+
+    monkeypatch.setattr("hermes_cli.setup.prompt_choice", fake_prompt_choice)
+    monkeypatch.setattr(
+        "hermes_cli.setup.prompt",
+        lambda message, *args, **kwargs: "venice-test-key" if "Venice API key" in message else "",
+    )
+    monkeypatch.setattr("hermes_cli.setup.prompt_yes_no", lambda *args, **kwargs: False)
+    monkeypatch.setattr("hermes_cli.auth.get_active_provider", lambda: None)
+    monkeypatch.setattr("hermes_cli.auth.detect_external_credentials", lambda: [])
+    monkeypatch.setattr(
+        "hermes_cli.models.fetch_api_models",
+        lambda api_key, base_url: ["venice-uncensored", "venice-vision"],
+    )
+    monkeypatch.setattr("agent.auxiliary_client.get_available_vision_backends", lambda: [])
+
+    setup_model_provider(config)
+    save_config(config)
+
+    env = _read_env(tmp_path)
+    reloaded = load_config()
+
+    assert env.get("VENICE_API_KEY") == "venice-test-key"
+    assert env.get("IMAGE_GENERATION_PROVIDER") == "venice"
+    assert env.get("VENICE_IMAGE_MODEL") == "nano-banana-pro"
+    assert env.get("AUXILIARY_VISION_PROVIDER") == "venice"
+    assert reloaded["model"]["provider"] == "venice"
+    assert reloaded["model"]["base_url"] == "https://api.venice.ai/api/v1"
+    assert reloaded["model"]["default"] == "venice-uncensored"
+
+
 def test_setup_keep_current_anthropic_can_configure_openai_vision_default(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     _clear_provider_env(monkeypatch)
@@ -244,8 +298,8 @@ def test_setup_copilot_uses_gh_auth_and_saves_provider(tmp_path, monkeypatch):
 
     def fake_prompt_choice(question, choices, default=0):
         if question == "Select your inference provider:":
-            assert choices[14] == "GitHub Copilot (uses GITHUB_TOKEN or gh auth token)"
-            return 14
+            assert "GitHub Copilot (uses GITHUB_TOKEN or gh auth token)" in choices
+            return choices.index("GitHub Copilot (uses GITHUB_TOKEN or gh auth token)")
         if question == "Select default model:":
             assert "gpt-4.1" in choices
             assert "gpt-5.4" in choices
@@ -323,8 +377,8 @@ def test_setup_copilot_acp_uses_model_picker_and_saves_provider(tmp_path, monkey
 
     def fake_prompt_choice(question, choices, default=0):
         if question == "Select your inference provider:":
-            assert choices[15] == "GitHub Copilot ACP (spawns `copilot --acp --stdio`)"
-            return 15
+            assert "GitHub Copilot ACP (spawns `copilot --acp --stdio`)" in choices
+            return choices.index("GitHub Copilot ACP (spawns `copilot --acp --stdio`)")
         if question == "Select default model:":
             assert "gpt-4.1" in choices
             assert "gpt-5.4" in choices

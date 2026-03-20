@@ -29,7 +29,9 @@ _ENV_VAR_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _EXTRA_ENV_KEYS = frozenset({
     "OPENAI_API_KEY", "OPENAI_BASE_URL",
     "ANTHROPIC_API_KEY", "ANTHROPIC_TOKEN",
+    "AUXILIARY_VISION_PROVIDER",
     "AUXILIARY_VISION_MODEL",
+    "IMAGE_GENERATION_PROVIDER", "VENICE_IMAGE_MODEL",
     "DISCORD_HOME_CHANNEL", "TELEGRAM_HOME_CHANNEL",
     "SIGNAL_ACCOUNT", "SIGNAL_HTTP_URL",
     "SIGNAL_ALLOWED_USERS", "SIGNAL_GROUP_ALLOWED_USERS",
@@ -372,7 +374,7 @@ DEFAULT_CONFIG = {
     },
 
     # Config schema version - bump this when adding new required fields
-    "_config_version": 10,
+    "_config_version": 11,
 }
 
 # =============================================================================
@@ -387,6 +389,7 @@ ENV_VARS_BY_VERSION: Dict[int, List[str]] = {
     5: ["WHATSAPP_ENABLED", "WHATSAPP_MODE", "WHATSAPP_ALLOWED_USERS",
         "SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "SLACK_ALLOWED_USERS"],
     10: ["TAVILY_API_KEY"],
+    11: ["VENICE_API_KEY"],
 }
 
 # Required environment variables with metadata for migration prompts.
@@ -412,6 +415,23 @@ OPTIONAL_ENV_VARS = {
         "url": "https://openrouter.ai/keys",
         "password": True,
         "tools": ["vision_analyze", "mixture_of_agents"],
+        "category": "provider",
+        "advanced": True,
+    },
+    "VENICE_API_KEY": {
+        "description": "Venice API key for private inference plus Venice-backed image and vision flows",
+        "prompt": "Venice API key",
+        "url": "https://venice.ai/settings/api",
+        "password": True,
+        "tools": ["image_generate", "vision_analyze"],
+        "category": "provider",
+        "advanced": True,
+    },
+    "VENICE_BASE_URL": {
+        "description": "Venice API base URL override",
+        "prompt": "Venice API base URL (leave empty for default)",
+        "url": None,
+        "password": False,
         "category": "provider",
         "advanced": True,
     },
@@ -1566,6 +1586,7 @@ def show_config():
     
     keys = [
         ("OPENROUTER_API_KEY", "OpenRouter"),
+        ("VENICE_API_KEY", "Venice"),
         ("VOICE_TOOLS_OPENAI_KEY", "OpenAI (STT/TTS)"),
         ("PARALLEL_API_KEY", "Parallel"),
         ("FIRECRAWL_API_KEY", "Firecrawl"),

@@ -53,6 +53,7 @@ logger = logging.getLogger(__name__)
 
 # Default auxiliary models for direct API-key providers (cheap/fast for side tasks)
 _API_KEY_PROVIDER_AUX_MODELS: Dict[str, str] = {
+    "venice": "venice-uncensored",
     "zai": "glm-4.5-flash",
     "kimi-coding": "kimi-k2-turbo-preview",
     "minimax": "MiniMax-M2.7-highspeed",
@@ -773,7 +774,7 @@ def resolve_provider_client(
 
     Args:
         provider: Provider identifier.  One of:
-            "openrouter", "nous", "openai-codex" (or "codex"),
+            "openrouter", "venice", "nous", "openai-codex" (or "codex"),
             "zai", "kimi-coding", "minimax", "minimax-cn",
             "custom" (OPENAI_BASE_URL + OPENAI_API_KEY),
             "auto" (full auto-detection chain).
@@ -925,6 +926,10 @@ def resolve_provider_client(
         base_url = str(creds.get("base_url", "")).strip().rstrip("/") or pconfig.inference_base_url
 
         default_model = _API_KEY_PROVIDER_AUX_MODELS.get(provider, "")
+        if provider == "venice":
+            venice_main_model = _read_main_model()
+            if venice_main_model and "/" not in venice_main_model:
+                default_model = venice_main_model
         final_model = model or default_model
 
         # Provider-specific headers

@@ -38,6 +38,7 @@ class TestProviderRegistry:
     @pytest.mark.parametrize("provider_id,name,auth_type", [
         ("copilot-acp", "GitHub Copilot ACP", "external_process"),
         ("copilot", "GitHub Copilot", "api_key"),
+        ("venice", "Venice", "api_key"),
         ("zai", "Z.AI / GLM", "api_key"),
         ("kimi-coding", "Kimi / Moonshot", "api_key"),
         ("minimax", "MiniMax", "api_key"),
@@ -61,6 +62,11 @@ class TestProviderRegistry:
         pconfig = PROVIDER_REGISTRY["copilot"]
         assert pconfig.api_key_env_vars == ("COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN")
         assert pconfig.base_url_env_var == ""
+
+    def test_venice_env_vars(self):
+        pconfig = PROVIDER_REGISTRY["venice"]
+        assert pconfig.api_key_env_vars == ("VENICE_API_KEY",)
+        assert pconfig.base_url_env_var == "VENICE_BASE_URL"
 
     def test_kimi_env_vars(self):
         pconfig = PROVIDER_REGISTRY["kimi-coding"]
@@ -90,6 +96,7 @@ class TestProviderRegistry:
     def test_base_urls(self):
         assert PROVIDER_REGISTRY["copilot"].inference_base_url == "https://api.githubcopilot.com"
         assert PROVIDER_REGISTRY["copilot-acp"].inference_base_url == "acp://copilot"
+        assert PROVIDER_REGISTRY["venice"].inference_base_url == "https://api.venice.ai/api/v1"
         assert PROVIDER_REGISTRY["zai"].inference_base_url == "https://api.z.ai/api/paas/v4"
         assert PROVIDER_REGISTRY["kimi-coding"].inference_base_url == "https://api.moonshot.ai/v1"
         assert PROVIDER_REGISTRY["minimax"].inference_base_url == "https://api.minimax.io/anthropic"
@@ -112,6 +119,7 @@ class TestProviderRegistry:
 PROVIDER_ENV_VARS = (
     "OPENROUTER_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "ANTHROPIC_TOKEN",
     "CLAUDE_CODE_OAUTH_TOKEN",
+    "VENICE_API_KEY", "VENICE_BASE_URL",
     "GLM_API_KEY", "ZAI_API_KEY", "Z_AI_API_KEY",
     "KIMI_API_KEY", "KIMI_BASE_URL", "MINIMAX_API_KEY", "MINIMAX_CN_API_KEY",
     "AI_GATEWAY_API_KEY", "AI_GATEWAY_BASE_URL",
@@ -148,6 +156,9 @@ class TestResolveProvider:
     def test_explicit_ai_gateway(self):
         assert resolve_provider("ai-gateway") == "ai-gateway"
 
+    def test_explicit_venice(self):
+        assert resolve_provider("venice") == "venice"
+
     def test_alias_glm(self):
         assert resolve_provider("glm") == "zai"
 
@@ -183,6 +194,9 @@ class TestResolveProvider:
 
     def test_alias_kilo_gateway(self):
         assert resolve_provider("kilo-gateway") == "kilocode"
+
+    def test_alias_venice_ai(self):
+        assert resolve_provider("venice-ai") == "venice"
 
     def test_alias_case_insensitive(self):
         assert resolve_provider("GLM") == "zai"
@@ -231,6 +245,10 @@ class TestResolveProvider:
         monkeypatch.setenv("AI_GATEWAY_API_KEY", "test-gw-key")
         assert resolve_provider("auto") == "ai-gateway"
 
+    def test_auto_detects_venice_key(self, monkeypatch):
+        monkeypatch.setenv("VENICE_API_KEY", "test-venice-key")
+        assert resolve_provider("auto") == "venice"
+
     def test_auto_detects_kilocode_key(self, monkeypatch):
         monkeypatch.setenv("KILOCODE_API_KEY", "test-kilo-key")
         assert resolve_provider("auto") == "kilocode"
@@ -277,6 +295,13 @@ class TestApiKeyProviderStatus:
         monkeypatch.setenv("KIMI_BASE_URL", "https://custom.kimi.example/v1")
         status = get_api_key_provider_status("kimi-coding")
         assert status["base_url"] == "https://custom.kimi.example/v1"
+
+    def test_venice_status_uses_custom_base_url(self, monkeypatch):
+        monkeypatch.setenv("VENICE_API_KEY", "venice-key")
+        monkeypatch.setenv("VENICE_BASE_URL", "https://proxy.venice.example/v1")
+        status = get_api_key_provider_status("venice")
+        assert status["configured"] is True
+        assert status["base_url"] == "https://proxy.venice.example/v1"
 
     def test_copilot_status_uses_gh_cli_token(self, monkeypatch):
         monkeypatch.setattr("hermes_cli.copilot_auth._try_gh_cli_token", lambda: "gho_gh_cli_token")
@@ -393,6 +418,14 @@ class TestResolveApiKeyProviderCredentials:
         assert creds["provider"] == "kimi-coding"
         assert creds["api_key"] == "kimi-secret-key"
         assert creds["base_url"] == "https://api.moonshot.ai/v1"
+
+    def test_resolve_venice_with_key(self, monkeypatch):
+        monkeypatch.setenv("VENICE_API_KEY", "venice-secret-key")
+        creds = resolve_api_key_provider_credentials("venice")
+        assert creds["provider"] == "venice"
+        assert creds["api_key"] == "venice-secret-key"
+        assert creds["base_url"] == "https://api.venice.ai/api/v1"
+        assert creds["source"] == "VENICE_API_KEY"
 
     def test_resolve_minimax_with_key(self, monkeypatch):
         monkeypatch.setenv("MINIMAX_API_KEY", "mm-secret-key")

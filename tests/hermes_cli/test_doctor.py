@@ -19,6 +19,10 @@ class TestProviderEnvDetection:
         content = "OPENAI_BASE_URL=http://localhost:1234/v1\nOPENAI_API_KEY=***"
         assert _has_provider_env_config(content)
 
+    def test_detects_venice_api_key(self):
+        content = "VENICE_API_KEY=***\n"
+        assert _has_provider_env_config(content)
+
     def test_detects_custom_endpoint_without_openrouter_key(self):
         content = "OPENAI_BASE_URL=http://localhost:8080/v1\n"
         assert _has_provider_env_config(content)

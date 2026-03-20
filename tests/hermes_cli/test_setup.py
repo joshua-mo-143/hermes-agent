@@ -18,6 +18,12 @@ def _clear_provider_env(monkeypatch):
         "OPENROUTER_API_KEY",
         "OPENAI_BASE_URL",
         "OPENAI_API_KEY",
+        "VENICE_API_KEY",
+        "VENICE_BASE_URL",
+        "VENICE_IMAGE_MODEL",
+        "IMAGE_GENERATION_PROVIDER",
+        "AUXILIARY_VISION_PROVIDER",
+        "AUXILIARY_VISION_MODEL",
         "LLM_MODEL",
     ):
         monkeypatch.delenv(key, raising=False)

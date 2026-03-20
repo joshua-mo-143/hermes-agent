@@ -40,6 +40,20 @@ def test_resolve_runtime_provider_ai_gateway(monkeypatch):
     assert resolved["requested_provider"] == "ai-gateway"
 
 
+def test_resolve_runtime_provider_venice(monkeypatch):
+    monkeypatch.setattr(rp, "resolve_provider", lambda *a, **k: "venice")
+    monkeypatch.setattr(rp, "_get_model_config", lambda: {})
+    monkeypatch.setenv("VENICE_API_KEY", "test-venice-key")
+
+    resolved = rp.resolve_runtime_provider(requested="venice")
+
+    assert resolved["provider"] == "venice"
+    assert resolved["api_mode"] == "chat_completions"
+    assert resolved["base_url"] == "https://api.venice.ai/api/v1"
+    assert resolved["api_key"] == "test-venice-key"
+    assert resolved["requested_provider"] == "venice"
+
+
 def test_resolve_runtime_provider_openrouter_explicit(monkeypatch):
     monkeypatch.setattr(rp, "resolve_provider", lambda *a, **k: "openrouter")
     monkeypatch.setattr(rp, "_get_model_config", lambda: {})

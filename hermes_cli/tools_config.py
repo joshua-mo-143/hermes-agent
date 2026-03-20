@@ -198,6 +198,16 @@ TOOL_CATEGORIES = {
                 "env_vars": [
                     {"key": "FAL_KEY", "prompt": "FAL API key", "url": "https://fal.ai/dashboard/keys"},
                 ],
+                "image_generation_provider": "fal",
+            },
+            {
+                "name": "Venice",
+                "tag": "OpenAI-compatible image generation with the same Venice key",
+                "env_vars": [
+                    {"key": "VENICE_API_KEY", "prompt": "Venice API key", "url": "https://venice.ai/settings/api"},
+                ],
+                "image_generation_provider": "venice",
+                "image_generation_default_model": "nano-banana-pro",
             },
         ],
     },
@@ -633,6 +643,8 @@ def _is_provider_active(provider: dict, config: dict) -> bool:
     """Check if a provider entry matches the currently active config."""
     if provider.get("tts_provider"):
         return config.get("tts", {}).get("provider") == provider["tts_provider"]
+    if provider.get("image_generation_provider"):
+        return get_env_value("IMAGE_GENERATION_PROVIDER") == provider["image_generation_provider"]
     if "browser_provider" in provider:
         current = config.get("browser", {}).get("cloud_provider")
         return provider["browser_provider"] == current
@@ -711,6 +723,11 @@ def _configure_provider(provider: dict, config: dict):
         _run_post_setup(provider["post_setup"])
 
     if all_configured:
+        if provider.get("image_generation_provider"):
+            save_env_value("IMAGE_GENERATION_PROVIDER", provider["image_generation_provider"])
+            default_image_model = provider.get("image_generation_default_model")
+            if default_image_model and not get_env_value("VENICE_IMAGE_MODEL"):
+                save_env_value("VENICE_IMAGE_MODEL", default_image_model)
         _print_success(f"  {provider['name']} configured!")
 
 
@@ -849,6 +866,15 @@ def _reconfigure_provider(provider: dict, config: dict):
     if provider.get("tts_provider"):
         config.setdefault("tts", {})["provider"] = provider["tts_provider"]
         _print_success(f"  TTS provider set to: {provider['tts_provider']}")
+
+    if provider.get("image_generation_provider"):
+        save_env_value("IMAGE_GENERATION_PROVIDER", provider["image_generation_provider"])
+        _print_success(
+            f"  Image generation provider set to: {provider['image_generation_provider']}"
+        )
+        default_image_model = provider.get("image_generation_default_model")
+        if default_image_model and not get_env_value("VENICE_IMAGE_MODEL"):
+            save_env_value("VENICE_IMAGE_MODEL", default_image_model)
 
     if "browser_provider" in provider:
         bp = provider["browser_provider"]

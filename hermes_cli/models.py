@@ -65,6 +65,9 @@ _PROVIDER_MODELS: dict[str, list[str]] = {
         "gpt-5.1-codex-mini",
         "gpt-5.1-codex-max",
     ],
+    "venice": [
+        "venice-uncensored",
+    ],
     "copilot-acp": [
         "copilot-acp",
     ],
@@ -202,6 +205,7 @@ _PROVIDER_MODELS: dict[str, list[str]] = {
 _PROVIDER_LABELS = {
     "openrouter": "OpenRouter",
     "openai-codex": "OpenAI Codex",
+    "venice": "Venice",
     "copilot-acp": "GitHub Copilot ACP",
     "nous": "Nous Portal",
     "copilot": "GitHub Copilot",
@@ -236,6 +240,7 @@ _PROVIDER_ALIASES = {
     "minimax_cn": "minimax-cn",
     "claude": "anthropic",
     "claude-code": "anthropic",
+    "venice-ai": "venice",
     "deep-seek": "deepseek",
     "opencode": "opencode-zen",
     "zen": "opencode-zen",
@@ -283,7 +288,7 @@ def list_available_providers() -> list[dict[str, str]]:
     """
     # Canonical providers in display order
     _PROVIDER_ORDER = [
-        "openrouter", "nous", "openai-codex", "copilot", "copilot-acp",
+        "openrouter", "venice", "nous", "openai-codex", "copilot", "copilot-acp",
         "zai", "kimi-coding", "minimax", "minimax-cn", "kilocode", "anthropic", "alibaba",
         "opencode-zen", "opencode-go",
         "ai-gateway", "deepseek", "custom",
@@ -572,6 +577,19 @@ def provider_model_ids(provider: Optional[str]) -> list[str]:
         live = _fetch_ai_gateway_models()
         if live:
             return live
+    if normalized == "venice":
+        try:
+            from hermes_cli.auth import resolve_api_key_provider_credentials
+
+            creds = resolve_api_key_provider_credentials("venice")
+            api_key = str(creds.get("api_key") or "").strip()
+            base_url = str(creds.get("base_url") or "").strip()
+            if api_key and base_url:
+                live = fetch_api_models(api_key, base_url)
+                if live:
+                    return live
+        except Exception:
+            pass
     if normalized == "custom":
         base_url = _get_custom_base_url()
         if base_url:

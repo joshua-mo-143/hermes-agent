@@ -26,6 +26,7 @@ def _clean_env(monkeypatch):
     for key in (
         "OPENROUTER_API_KEY", "OPENAI_BASE_URL", "OPENAI_API_KEY",
         "OPENAI_MODEL", "LLM_MODEL", "NOUS_INFERENCE_BASE_URL",
+        "VENICE_API_KEY", "VENICE_BASE_URL",
         "ANTHROPIC_API_KEY", "ANTHROPIC_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN",
         # Per-task provider/model/direct-endpoint overrides
         "AUXILIARY_VISION_PROVIDER", "AUXILIARY_VISION_MODEL",
@@ -338,6 +339,17 @@ class TestVisionClientFallback:
         assert model == "vision-model"
         assert mock_openai.call_args.kwargs["base_url"] == "http://localhost:4567/v1"
         assert mock_openai.call_args.kwargs["api_key"] == "vision-key"
+
+    def test_vision_explicit_venice_provider_uses_main_model(self, monkeypatch):
+        monkeypatch.setenv("AUXILIARY_VISION_PROVIDER", "venice")
+        monkeypatch.setenv("VENICE_API_KEY", "venice-key")
+        monkeypatch.setenv("OPENAI_MODEL", "venice-vision-model")
+        with patch("agent.auxiliary_client.OpenAI") as mock_openai:
+            client, model = get_vision_auxiliary_client()
+        assert client is not None
+        assert model == "venice-vision-model"
+        assert mock_openai.call_args.kwargs["base_url"] == "https://api.venice.ai/api/v1"
+        assert mock_openai.call_args.kwargs["api_key"] == "venice-key"
 
     def test_vision_direct_endpoint_requires_openai_api_key(self, monkeypatch):
         monkeypatch.setenv("OPENROUTER_API_KEY", "or-key")

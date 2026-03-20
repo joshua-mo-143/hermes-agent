@@ -28,13 +28,19 @@ Usage:
     )
 """
 
+import base64
+import datetime
 import json
 import logging
 import os
-import datetime
+import tempfile
 from typing import Dict, Any, Optional, Union
-import fal_client
 from tools.debug_helpers import DebugSession
+
+try:
+    import fal_client
+except ImportError:
+    fal_client = None
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +51,13 @@ DEFAULT_NUM_INFERENCE_STEPS = 50
 DEFAULT_GUIDANCE_SCALE = 4.5
 DEFAULT_NUM_IMAGES = 1
 DEFAULT_OUTPUT_FORMAT = "png"
+VENICE_DEFAULT_BASE_URL = "https://api.venice.ai/api/v1"
+VENICE_DEFAULT_IMAGE_MODEL = "nano-banana-pro"
+VENICE_SIZE_MAP = {
+    "landscape": "1536x1024",
+    "square": "1024x1024",
+    "portrait": "1024x1536",
+}
 
 # Safety settings
 ENABLE_SAFETY_CHECKER = False
@@ -77,6 +90,117 @@ VALID_OUTPUT_FORMATS = ["jpeg", "png"]
 VALID_ACCELERATION_MODES = ["none", "regular", "high"]
 
 _debug = DebugSession("image_tools", env_var="IMAGE_TOOLS_DEBUG")
+
+
+def _import_openai_client():
+    """Lazy import OpenAI client for Venice-compatible image APIs."""
+    from openai import OpenAI as OpenAIClient
+
+    return OpenAIClient
+
+
+def _resolve_image_generation_provider() -> str:
+    """Resolve the active image backend, honoring explicit setup choices."""
+    explicit = os.getenv("IMAGE_GENERATION_PROVIDER", "").strip().lower()
+    if explicit in {"fal", "venice"}:
+        return explicit
+    if os.getenv("FAL_KEY") and fal_client is not None:
+        return "fal"
+    if os.getenv("VENICE_API_KEY"):
+        return "venice"
+    if os.getenv("FAL_KEY"):
+        return "fal"
+    return ""
+
+
+def _write_venice_base64_image(b64_payload: str, output_format: str) -> Optional[str]:
+    """Persist a Venice base64 image response to a temp file."""
+    try:
+        suffix = ".jpeg" if output_format == "jpeg" else ".png"
+        decoded = base64.b64decode(b64_payload)
+        with tempfile.NamedTemporaryFile(
+            prefix="hermes_venice_image_",
+            suffix=suffix,
+            delete=False,
+        ) as handle:
+            handle.write(decoded)
+            return handle.name
+    except Exception as exc:
+        logger.warning("Could not decode Venice base64 image payload: %s", exc)
+        return None
+
+
+def _extract_venice_image_entry(item: Any, output_format: str) -> Optional[Dict[str, Any]]:
+    """Normalize a Venice/OpenAI image response item into Hermes' image shape."""
+    if isinstance(item, dict):
+        url = item.get("url")
+        b64_json = item.get("b64_json")
+    else:
+        url = getattr(item, "url", None)
+        b64_json = getattr(item, "b64_json", None)
+
+    if isinstance(url, str) and url:
+        return {
+            "url": url,
+            "width": 0,
+            "height": 0,
+            "upscaled": False,
+        }
+
+    if isinstance(b64_json, str) and b64_json:
+        file_path = _write_venice_base64_image(b64_json, output_format)
+        if file_path:
+            return {
+                "url": file_path,
+                "width": 0,
+                "height": 0,
+                "upscaled": False,
+            }
+
+    return None
+
+
+def _generate_venice_images(
+    *,
+    prompt: str,
+    aspect_ratio: str,
+    num_images: int,
+    output_format: str,
+) -> list[Dict[str, Any]]:
+    """Generate images through Venice's OpenAI-compatible /images/generations API."""
+    api_key = os.getenv("VENICE_API_KEY", "").strip()
+    if not api_key:
+        raise ValueError("VENICE_API_KEY environment variable not set")
+
+    base_url = os.getenv("VENICE_BASE_URL", "").strip().rstrip("/") or VENICE_DEFAULT_BASE_URL
+    model = os.getenv("VENICE_IMAGE_MODEL", "").strip() or VENICE_DEFAULT_IMAGE_MODEL
+    size = VENICE_SIZE_MAP.get(aspect_ratio, VENICE_SIZE_MAP[DEFAULT_ASPECT_RATIO])
+
+    OpenAIClient = _import_openai_client()
+    client = OpenAIClient(api_key=api_key, base_url=base_url)
+    response = client.images.generate(
+        model=model,
+        prompt=prompt.strip(),
+        size=size,
+        n=num_images,
+    )
+
+    items = getattr(response, "data", None)
+    if items is None and isinstance(response, dict):
+        items = response.get("data", [])
+    if not items:
+        raise ValueError("Invalid response from Venice API - no images returned")
+
+    formatted_images = []
+    for item in items:
+        normalized = _extract_venice_image_entry(item, output_format)
+        if normalized:
+            formatted_images.append(normalized)
+
+    if not formatted_images:
+        raise ValueError("No valid image URLs or payloads returned from Venice API")
+
+    return formatted_images
 
 
 def _validate_parameters(
@@ -273,90 +397,115 @@ def image_generate_tool(
     start_time = datetime.datetime.now()
     
     try:
-        logger.info("Generating %s image(s) with FLUX 2 Pro: %s", num_images, prompt[:80])
+        logger.info("Generating %s image(s): %s", num_images, prompt[:80])
         
         # Validate prompt
         if not prompt or not isinstance(prompt, str) or len(prompt.strip()) == 0:
             raise ValueError("Prompt is required and must be a non-empty string")
         
-        # Check API key availability
-        if not os.getenv("FAL_KEY"):
-            raise ValueError("FAL_KEY environment variable not set")
-        
         # Validate other parameters
         validated_params = _validate_parameters(
             image_size, num_inference_steps, guidance_scale, num_images, output_format, "none"
         )
-        
-        # Prepare arguments for FAL.ai FLUX 2 Pro API
-        arguments = {
-            "prompt": prompt.strip(),
-            "image_size": validated_params["image_size"],
-            "num_inference_steps": validated_params["num_inference_steps"],
-            "guidance_scale": validated_params["guidance_scale"],
-            "num_images": validated_params["num_images"],
-            "output_format": validated_params["output_format"],
-            "enable_safety_checker": ENABLE_SAFETY_CHECKER,
-            "safety_tolerance": SAFETY_TOLERANCE,
-            "sync_mode": True  # Use sync mode for immediate results
-        }
-        
-        # Add seed if provided
-        if seed is not None and isinstance(seed, int):
-            arguments["seed"] = seed
-        
-        logger.info("Submitting generation request to FAL.ai FLUX 2 Pro...")
-        logger.info("  Model: %s", DEFAULT_MODEL)
-        logger.info("  Aspect Ratio: %s -> %s", aspect_ratio_lower, image_size)
-        logger.info("  Steps: %s", validated_params['num_inference_steps'])
-        logger.info("  Guidance: %s", validated_params['guidance_scale'])
-        
-        # Submit request to FAL.ai using sync API (avoids cached event loop issues)
-        handler = fal_client.submit(
-            DEFAULT_MODEL,
-            arguments=arguments
-        )
-        
-        # Get the result (sync — blocks until done)
-        result = handler.get()
-        
-        generation_time = (datetime.datetime.now() - start_time).total_seconds()
-        
-        # Process the response
-        if not result or "images" not in result:
-            raise ValueError("Invalid response from FAL.ai API - no images returned")
-        
-        images = result.get("images", [])
-        if not images:
-            raise ValueError("No images were generated")
-        
-        # Format image data and upscale images
-        formatted_images = []
-        for img in images:
-            if isinstance(img, dict) and "url" in img:
-                original_image = {
-                    "url": img["url"],
-                    "width": img.get("width", 0),
-                    "height": img.get("height", 0)
-                }
-                
-                # Attempt to upscale the image
-                upscaled_image = _upscale_image(img["url"], prompt.strip())
-                
-                if upscaled_image:
-                    # Use upscaled image if successful
-                    formatted_images.append(upscaled_image)
-                else:
-                    # Fall back to original image if upscaling fails
-                    logger.warning("Using original image as fallback")
-                    original_image["upscaled"] = False
-                    formatted_images.append(original_image)
+
+        provider = _resolve_image_generation_provider()
+        if not provider:
+            raise ValueError(
+                "No image generation backend configured. Set FAL_KEY or VENICE_API_KEY."
+            )
+
+        if provider == "fal":
+            if not os.getenv("FAL_KEY"):
+                raise ValueError("FAL_KEY environment variable not set")
+            if fal_client is None:
+                raise ValueError("fal-client package is not installed")
+
+            # Prepare arguments for FAL.ai FLUX 2 Pro API
+            arguments = {
+                "prompt": prompt.strip(),
+                "image_size": validated_params["image_size"],
+                "num_inference_steps": validated_params["num_inference_steps"],
+                "guidance_scale": validated_params["guidance_scale"],
+                "num_images": validated_params["num_images"],
+                "output_format": validated_params["output_format"],
+                "enable_safety_checker": ENABLE_SAFETY_CHECKER,
+                "safety_tolerance": SAFETY_TOLERANCE,
+                "sync_mode": True,  # Use sync mode for immediate results
+            }
+
+            # Add seed if provided
+            if seed is not None and isinstance(seed, int):
+                arguments["seed"] = seed
+
+            logger.info("Submitting generation request to FAL.ai FLUX 2 Pro...")
+            logger.info("  Model: %s", DEFAULT_MODEL)
+            logger.info("  Aspect Ratio: %s -> %s", aspect_ratio_lower, image_size)
+            logger.info("  Steps: %s", validated_params["num_inference_steps"])
+            logger.info("  Guidance: %s", validated_params["guidance_scale"])
+
+            # Submit request to FAL.ai using sync API (avoids cached event loop issues)
+            handler = fal_client.submit(
+                DEFAULT_MODEL,
+                arguments=arguments,
+            )
+
+            # Get the result (sync — blocks until done)
+            result = handler.get()
+
+            generation_time = (datetime.datetime.now() - start_time).total_seconds()
+
+            # Process the response
+            if not result or "images" not in result:
+                raise ValueError("Invalid response from FAL.ai API - no images returned")
+
+            images = result.get("images", [])
+            if not images:
+                raise ValueError("No images were generated")
+
+            # Format image data and upscale images
+            formatted_images = []
+            for img in images:
+                if isinstance(img, dict) and "url" in img:
+                    original_image = {
+                        "url": img["url"],
+                        "width": img.get("width", 0),
+                        "height": img.get("height", 0),
+                    }
+
+                    # Attempt to upscale the image
+                    upscaled_image = _upscale_image(img["url"], prompt.strip())
+
+                    if upscaled_image:
+                        # Use upscaled image if successful
+                        formatted_images.append(upscaled_image)
+                    else:
+                        # Fall back to original image if upscaling fails
+                        logger.warning("Using original image as fallback")
+                        original_image["upscaled"] = False
+                        formatted_images.append(original_image)
+        else:
+            logger.info("Submitting image generation request to Venice...")
+            logger.info("  Model: %s", os.getenv("VENICE_IMAGE_MODEL", "") or VENICE_DEFAULT_IMAGE_MODEL)
+            logger.info("  Aspect Ratio: %s", aspect_ratio_lower)
+            formatted_images = _generate_venice_images(
+                prompt=prompt,
+                aspect_ratio=aspect_ratio_lower,
+                num_images=validated_params["num_images"],
+                output_format=validated_params["output_format"],
+            )
+            generation_time = (datetime.datetime.now() - start_time).total_seconds()
         
         if not formatted_images:
-            raise ValueError("No valid image URLs returned from API")
+            raise ValueError("No valid images returned from configured provider")
         
         upscaled_count = sum(1 for img in formatted_images if img.get("upscaled", False))
-        logger.info("Generated %s image(s) in %.1fs (%s upscaled)", len(formatted_images), generation_time, upscaled_count)
+        logger.info(
+            "Generated %s image(s) in %.1fs (%s upscaled) via %s",
+            len(formatted_images),
+            generation_time,
+            upscaled_count,
+            provider,
+        )
         
         # Prepare successful response - minimal format
         response_data = {
@@ -403,6 +552,11 @@ def check_fal_api_key() -> bool:
     return bool(os.getenv("FAL_KEY"))
 
 
+def check_venice_api_key() -> bool:
+    """Check if the Venice API key is available in environment variables."""
+    return bool(os.getenv("VENICE_API_KEY"))
+
+
 def check_image_generation_requirements() -> bool:
     """
     Check if all requirements for image generation tools are met.
@@ -411,16 +565,19 @@ def check_image_generation_requirements() -> bool:
         bool: True if requirements are met, False otherwise
     """
     try:
-        # Check API key
-        if not check_fal_api_key():
-            return False
-        
-        # Check if fal_client is available
-        import fal_client
-        return True
-        
+        provider = _resolve_image_generation_provider()
+        if provider == "fal":
+            if not check_fal_api_key() or fal_client is None:
+                return False
+            return True
+        if provider == "venice":
+            if not check_venice_api_key():
+                return False
+            _import_openai_client()
+            return True
     except ImportError:
         return False
+    return False
 
 
 def get_debug_session_info() -> Dict[str, Any]:

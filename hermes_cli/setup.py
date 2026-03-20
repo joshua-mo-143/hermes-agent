@@ -58,6 +58,7 @@ _DEFAULT_PROVIDER_MODELS = {
     "copilot-acp": [
         "copilot-acp",
     ],
+    "venice": ["venice-uncensored"],
     "copilot": [
         "gpt-5.4",
         "gpt-5.4-mini",
@@ -564,9 +565,21 @@ def _print_setup_summary(config: dict, hermes_home):
 
     # Vision — use the same runtime resolver as the actual vision tools
     try:
-        from agent.auxiliary_client import get_available_vision_backends
+        from agent.auxiliary_client import (
+            get_available_vision_backends,
+            resolve_vision_provider_client,
+        )
 
         _vision_backends = get_available_vision_backends()
+        if (
+            get_env_value("AUXILIARY_VISION_PROVIDER") == "venice"
+            and get_env_value("VENICE_API_KEY")
+        ):
+            _vision_backends = ["venice"]
+        elif not _vision_backends:
+            _resolved_provider, _vision_client, _vision_model = resolve_vision_provider_client()
+            if _vision_client is not None and _resolved_provider:
+                _vision_backends = [_resolved_provider]
     except Exception:
         _vision_backends = []
 
@@ -605,11 +618,18 @@ def _print_setup_summary(config: dict, hermes_home):
             ("Browser Automation", False, "npm install -g agent-browser")
         )
 
-    # FAL (image generation)
-    if get_env_value("FAL_KEY"):
-        tool_status.append(("Image Generation", True, None))
+    # Image generation (FAL or Venice)
+    _image_provider = get_env_value("IMAGE_GENERATION_PROVIDER")
+    if _image_provider == "venice" and get_env_value("VENICE_API_KEY"):
+        tool_status.append(("Image Generation (Venice)", True, None))
+    elif _image_provider == "fal" and get_env_value("FAL_KEY"):
+        tool_status.append(("Image Generation (FAL.ai)", True, None))
+    elif get_env_value("FAL_KEY"):
+        tool_status.append(("Image Generation (FAL.ai)", True, None))
+    elif get_env_value("VENICE_API_KEY"):
+        tool_status.append(("Image Generation (Venice)", True, None))
     else:
-        tool_status.append(("Image Generation", False, "FAL_KEY"))
+        tool_status.append(("Image Generation", False, "FAL_KEY or VENICE_API_KEY"))
 
     # TTS — show configured provider
     tts_provider = config.get("tts", {}).get("provider", "edge")
@@ -877,6 +897,7 @@ def setup_model_provider(config: dict):
         "Login with OpenAI Codex",
         "OpenRouter API key (100+ models, pay-per-use)",
         "Custom OpenAI-compatible endpoint (self-hosted / VLLM / etc.)",
+        "Venice API key (private OpenAI-compatible inference + Venice images)",
         "Z.AI / GLM (Zhipu AI models)",
         "Kimi / Moonshot (Kimi coding models)",
         "MiniMax (global endpoint)",
@@ -1057,7 +1078,50 @@ def setup_model_provider(config: dict):
         # the model selection step below is skipped (line 1631 check)
         # but vision and TTS setup still run.
 
-    elif provider_idx == 4:  # Z.AI / GLM
+    elif provider_idx == 4:  # Venice
+        selected_provider = "venice"
+        print()
+        print_header("Venice API Key")
+        pconfig = PROVIDER_REGISTRY["venice"]
+        venice_base_url = get_env_value("VENICE_BASE_URL") or pconfig.inference_base_url
+        print_info("Venice gives Hermes a single private backend for inference and image generation.")
+        print_info(f"Base URL: {venice_base_url}")
+        print_info("Get your API key at: https://venice.ai/settings/api")
+        print()
+
+        existing_key = get_env_value("VENICE_API_KEY")
+        if existing_key:
+            print_info(f"Current: {existing_key[:8]}... (configured)")
+            if prompt_yes_no("Update Venice API key?", False):
+                api_key = prompt("  Venice API key", password=True)
+                if api_key:
+                    save_env_value("VENICE_API_KEY", api_key)
+                    print_success("Venice API key updated")
+        else:
+            api_key = prompt("  Venice API key", password=True)
+            if api_key:
+                save_env_value("VENICE_API_KEY", api_key)
+                print_success("Venice API key saved")
+            else:
+                print_warning("Skipped - agent won't work without an API key")
+
+        if existing_custom:
+            save_env_value("OPENAI_BASE_URL", "")
+            save_env_value("OPENAI_API_KEY", "")
+
+        venice_key = get_env_value("VENICE_API_KEY")
+        if venice_key:
+            # Configure Venice-backed services so onboarding can stay single-key.
+            save_env_value("IMAGE_GENERATION_PROVIDER", "venice")
+            if not get_env_value("VENICE_IMAGE_MODEL"):
+                save_env_value("VENICE_IMAGE_MODEL", "nano-banana-pro")
+            save_env_value("AUXILIARY_VISION_PROVIDER", "venice")
+            print_success("Venice configured for image generation and vision routing")
+
+        _set_model_provider(config, "venice", venice_base_url)
+        selected_base_url = venice_base_url
+
+    elif provider_idx == 5:  # Z.AI / GLM
         selected_provider = "zai"
         print()
         print_header("Z.AI / GLM API Key")
@@ -1118,7 +1182,7 @@ def setup_model_provider(config: dict):
         _set_model_provider(config, "zai", zai_base_url)
         selected_base_url = zai_base_url
 
-    elif provider_idx == 5:  # Kimi / Moonshot
+    elif provider_idx == 6:  # Kimi / Moonshot
         selected_provider = "kimi-coding"
         print()
         print_header("Kimi / Moonshot API Key")
@@ -1151,7 +1215,7 @@ def setup_model_provider(config: dict):
         _set_model_provider(config, "kimi-coding", pconfig.inference_base_url)
         selected_base_url = pconfig.inference_base_url
 
-    elif provider_idx == 6:  # MiniMax
+    elif provider_idx == 7:  # MiniMax
         selected_provider = "minimax"
         print()
         print_header("MiniMax API Key")
@@ -1184,7 +1248,7 @@ def setup_model_provider(config: dict):
         _set_model_provider(config, "minimax", pconfig.inference_base_url)
         selected_base_url = pconfig.inference_base_url
 
-    elif provider_idx == 7:  # MiniMax China
+    elif provider_idx == 8:  # MiniMax China
         selected_provider = "minimax-cn"
         print()
         print_header("MiniMax China API Key")
@@ -1217,7 +1281,7 @@ def setup_model_provider(config: dict):
         _set_model_provider(config, "minimax-cn", pconfig.inference_base_url)
         selected_base_url = pconfig.inference_base_url
 
-    elif provider_idx == 8:  # Kilo Code
+    elif provider_idx == 9:  # Kilo Code
         selected_provider = "kilocode"
         print()
         print_header("Kilo Code API Key")
@@ -1250,7 +1314,7 @@ def setup_model_provider(config: dict):
         _set_model_provider(config, "kilocode", pconfig.inference_base_url)
         selected_base_url = pconfig.inference_base_url
 
-    elif provider_idx == 9:  # Anthropic
+    elif provider_idx == 10:  # Anthropic
         selected_provider = "anthropic"
         print()
         print_header("Anthropic Authentication")
@@ -1354,7 +1418,7 @@ def setup_model_provider(config: dict):
         _set_model_provider(config, "anthropic")
         selected_base_url = ""
 
-    elif provider_idx == 10:  # AI Gateway
+    elif provider_idx == 11:  # AI Gateway
         selected_provider = "ai-gateway"
         print()
         print_header("AI Gateway API Key")
@@ -1386,7 +1450,7 @@ def setup_model_provider(config: dict):
         _update_config_for_provider("ai-gateway", pconfig.inference_base_url, default_model="anthropic/claude-opus-4.6")
         _set_model_provider(config, "ai-gateway", pconfig.inference_base_url)
 
-    elif provider_idx == 11:  # Alibaba Cloud / DashScope
+    elif provider_idx == 12:  # Alibaba Cloud / DashScope
         selected_provider = "alibaba"
         print()
         print_header("Alibaba Cloud / DashScope API Key")
@@ -1418,7 +1482,7 @@ def setup_model_provider(config: dict):
         _update_config_for_provider("alibaba", pconfig.inference_base_url, default_model="qwen3.5-plus")
         _set_model_provider(config, "alibaba", pconfig.inference_base_url)
 
-    elif provider_idx == 12:  # OpenCode Zen
+    elif provider_idx == 13:  # OpenCode Zen
         selected_provider = "opencode-zen"
         print()
         print_header("OpenCode Zen API Key")
@@ -1451,7 +1515,7 @@ def setup_model_provider(config: dict):
         _set_model_provider(config, "opencode-zen", pconfig.inference_base_url)
         selected_base_url = pconfig.inference_base_url
 
-    elif provider_idx == 13:  # OpenCode Go
+    elif provider_idx == 14:  # OpenCode Go
         selected_provider = "opencode-go"
         print()
         print_header("OpenCode Go API Key")
@@ -1484,7 +1548,7 @@ def setup_model_provider(config: dict):
         _set_model_provider(config, "opencode-go", pconfig.inference_base_url)
         selected_base_url = pconfig.inference_base_url
 
-    elif provider_idx == 14:  # GitHub Copilot
+    elif provider_idx == 15:  # GitHub Copilot
         selected_provider = "copilot"
         print()
         print_header("GitHub Copilot")
@@ -1517,7 +1581,7 @@ def setup_model_provider(config: dict):
         _set_model_provider(config, "copilot", pconfig.inference_base_url)
         selected_base_url = pconfig.inference_base_url
 
-    elif provider_idx == 15:  # GitHub Copilot ACP
+    elif provider_idx == 16:  # GitHub Copilot ACP
         selected_provider = "copilot-acp"
         print()
         print_header("GitHub Copilot ACP")
@@ -1533,7 +1597,7 @@ def setup_model_provider(config: dict):
         _set_model_provider(config, "copilot-acp", pconfig.inference_base_url)
         selected_base_url = pconfig.inference_base_url
 
-    # else: provider_idx == 16 (Keep current) — only shown when a provider already exists
+    # else: provider_idx == 17 (Keep current) — only shown when a provider already exists
     # Normalize "keep current" to an explicit provider so downstream logic
     # doesn't fall back to the generic OpenRouter/static-model path.
     if selected_provider is None:
@@ -1549,9 +1613,21 @@ def setup_model_provider(config: dict):
     # ── Vision & Image Analysis Setup ──
     # Keep setup aligned with the actual runtime resolver the vision tools use.
     try:
-        from agent.auxiliary_client import get_available_vision_backends
+        from agent.auxiliary_client import (
+            get_available_vision_backends,
+            resolve_vision_provider_client,
+        )
 
         _vision_backends = set(get_available_vision_backends())
+        if (
+            get_env_value("AUXILIARY_VISION_PROVIDER") == "venice"
+            and get_env_value("VENICE_API_KEY")
+        ):
+            _vision_backends.add("venice")
+        elif not _vision_backends:
+            _resolved_provider, _vision_client, _vision_model = resolve_vision_provider_client()
+            if _vision_client is not None and _resolved_provider:
+                _vision_backends.add(_resolved_provider)
     except Exception:
         _vision_backends = set()
 
@@ -1573,6 +1649,7 @@ def setup_model_provider(config: dict):
             "minimax-cn": "MiniMax CN",
             "anthropic": "Anthropic",
             "ai-gateway": "AI Gateway",
+            "venice": "Venice",
             "custom": "your custom endpoint",
         }
         _prov_display = _prov_names.get(selected_provider, selected_provider or "your provider")
@@ -1714,7 +1791,7 @@ def setup_model_provider(config: dict):
             model_cfg = _model_config_dict(config)
             model_cfg["api_mode"] = "chat_completions"
             config["model"] = model_cfg
-        elif selected_provider in ("copilot", "zai", "kimi-coding", "minimax", "minimax-cn", "kilocode", "ai-gateway"):
+        elif selected_provider in ("copilot", "venice", "zai", "kimi-coding", "minimax", "minimax-cn", "kilocode", "ai-gateway"):
             _setup_provider_model_selection(
                 config, selected_provider, current_model,
                 prompt_choice, prompt,
@@ -1775,7 +1852,7 @@ def setup_model_provider(config: dict):
     # Write provider+base_url to config.yaml only after model selection is complete.
     # This prevents a race condition where the gateway picks up a new provider
     # before the model name has been updated to match.
-    if selected_provider in ("copilot-acp", "copilot", "zai", "kimi-coding", "minimax", "minimax-cn", "kilocode", "anthropic") and selected_base_url is not None:
+    if selected_provider in ("copilot-acp", "copilot", "venice", "zai", "kimi-coding", "minimax", "minimax-cn", "kilocode", "anthropic") and selected_base_url is not None:
         _update_config_for_provider(selected_provider, selected_base_url)
 
     save_config(config)

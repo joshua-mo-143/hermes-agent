@@ -37,9 +37,11 @@ from hermes_constants import OPENROUTER_MODELS_URL
 _PROVIDER_ENV_HINTS = (
     "OPENROUTER_API_KEY",
     "OPENAI_API_KEY",
+    "VENICE_API_KEY",
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_TOKEN",
     "OPENAI_BASE_URL",
+    "VENICE_BASE_URL",
     "GLM_API_KEY",
     "ZAI_API_KEY",
     "Z_AI_API_KEY",
@@ -566,6 +568,7 @@ def run_doctor(args):
     # Tuple: (name, env_vars, default_url, base_env, supports_models_endpoint)
     # If supports_models_endpoint is False, we skip the health check and just show "configured"
     _apikey_providers = [
+        ("Venice",           ("VENICE_API_KEY",),                              "https://api.venice.ai/api/v1/models", "VENICE_BASE_URL", True),
         ("Z.AI / GLM",      ("GLM_API_KEY", "ZAI_API_KEY", "Z_AI_API_KEY"), "https://api.z.ai/api/paas/v4/models", "GLM_BASE_URL", True),
         ("Kimi / Moonshot",  ("KIMI_API_KEY",),                              "https://api.moonshot.ai/v1/models",   "KIMI_BASE_URL", True),
         # MiniMax APIs don't support /models endpoint — https://github.com/NousResearch/hermes-agent/issues/811
