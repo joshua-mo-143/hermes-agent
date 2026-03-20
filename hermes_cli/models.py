@@ -66,6 +66,7 @@ _PROVIDER_MODELS: dict[str, list[str]] = {
         "gpt-5.1-codex-max",
     ],
     "venice": [
+        "kimi-k2.5",
         "venice-uncensored",
     ],
     "copilot-acp": [

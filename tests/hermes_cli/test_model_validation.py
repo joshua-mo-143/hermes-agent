@@ -160,9 +160,9 @@ class TestProviderModelIds:
             return_value={"api_key": "venice-key", "base_url": "https://api.venice.ai/api/v1"},
         ), patch(
             "hermes_cli.models.fetch_api_models",
-            return_value=["venice-uncensored", "venice-vision"],
+            return_value=["kimi-k2.5", "venice-vision"],
         ):
-            assert provider_model_ids("venice") == ["venice-uncensored", "venice-vision"]
+            assert provider_model_ids("venice") == ["kimi-k2.5", "venice-vision"]
 
     def test_copilot_prefers_live_catalog(self):
         with patch("hermes_cli.auth.resolve_api_key_provider_credentials", return_value={"api_key": "gh-token"}), \

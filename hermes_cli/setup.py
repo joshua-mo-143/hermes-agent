@@ -58,7 +58,7 @@ _DEFAULT_PROVIDER_MODELS = {
     "copilot-acp": [
         "copilot-acp",
     ],
-    "venice": ["venice-uncensored"],
+    "venice": ["kimi-k2.5", "venice-uncensored"],
     "copilot": [
         "gpt-5.4",
         "gpt-5.4-mini",

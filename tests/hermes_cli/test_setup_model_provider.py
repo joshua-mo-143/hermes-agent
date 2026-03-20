@@ -207,8 +207,8 @@ def test_setup_venice_configures_single_key_services(tmp_path, monkeypatch):
                 "Venice API key (private OpenAI-compatible inference + Venice images)"
             )
         if question == "Select default model:":
-            assert "venice-uncensored" in choices
-            return choices.index("venice-uncensored")
+            assert "kimi-k2.5" in choices
+            return choices.index("kimi-k2.5")
         tts_idx = _maybe_keep_current_tts(question, choices)
         if tts_idx is not None:
             return tts_idx
@@ -224,7 +224,7 @@ def test_setup_venice_configures_single_key_services(tmp_path, monkeypatch):
     monkeypatch.setattr("hermes_cli.auth.detect_external_credentials", lambda: [])
     monkeypatch.setattr(
         "hermes_cli.models.fetch_api_models",
-        lambda api_key, base_url: ["venice-uncensored", "venice-vision"],
+        lambda api_key, base_url: ["kimi-k2.5", "venice-vision"],
     )
     monkeypatch.setattr("agent.auxiliary_client.get_available_vision_backends", lambda: [])
 
@@ -240,7 +240,7 @@ def test_setup_venice_configures_single_key_services(tmp_path, monkeypatch):
     assert env.get("AUXILIARY_VISION_PROVIDER") == "venice"
     assert reloaded["model"]["provider"] == "venice"
     assert reloaded["model"]["base_url"] == "https://api.venice.ai/api/v1"
-    assert reloaded["model"]["default"] == "venice-uncensored"
+    assert reloaded["model"]["default"] == "kimi-k2.5"
 
 
 def test_setup_keep_current_anthropic_can_configure_openai_vision_default(tmp_path, monkeypatch):
